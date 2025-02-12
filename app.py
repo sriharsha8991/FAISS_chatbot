@@ -1,327 +1,375 @@
 # app.py
 import streamlit as st
-import os
-import tempfile
-from typing import List
- 
 from langchain_groq import ChatGroq
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import ConversationalRetrievalChain
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_community.document_loaders import Docx2txtLoader
-from langchain.schema import Document
 from langchain.prompts import PromptTemplate
- 
-# Configure Streamlit page
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationChain
+
+# Page configuration
 st.set_page_config(
-    page_title="MediBot - Medical Document Assistant",
+    page_title="MediChat",
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Add custom CSS for medical theme
+# Enhanced CSS for chat interface (same as before)
 st.markdown("""
     <style>
-        /* Medical color scheme */
-        :root {
-            --medical-blue: #0077cc;
-            --light-blue: #e6f3ff;
-            --medical-red: #ff4444;
+        /* Main container */
+        .main > div {
+            padding-top: 0;
         }
         
-        /* Header styling */
-        .main .block-container {
-            padding-top: 2rem;
-        }
-        
-        /* Sidebar styling */
-        .css-1d391kg {
-            background-color: var(--light-blue);
-        }
-        
-        /* Button styling */
-        .stButton>button {
-            width: 100%;
-            background-color: var(--medical-blue) !important;
-            color: white !important;
-            border-radius: 25px;
-        }
-        
-        /* Chat container styling */
+        /* Chat container */
         .chat-container {
-            border: 1px solid #e0e0e0;
-            border-radius: 10px;
+            max-width: 800px;
+            margin: 0 auto;
             padding: 1rem;
-            margin: 1rem 0;
-            background-color: white;
-        }
-        
-        /* Question styling */
-        .question {
-            background-color: var(--light-blue);
-            padding: 1rem;
-            border-radius: 15px;
-            margin: 0.5rem 0;
-        }
-        
-        /* Answer styling */
-        .answer {
-            background-color: white;
-            padding: 1rem;
-            border-radius: 15px;
-            margin: 0.5rem 0;
-            border-left: 4px solid var(--medical-blue);
-        }
-        
-        /* Alert styling */
-        .stAlert {
-            border-radius: 10px;
-            margin: 1rem 0;
-        }
-        
-        /* Input field styling */
-        .stTextInput>div>div>input {
-            border-radius: 25px;
-        }
-        
-        /* Custom title styling */
-        .medical-title {
-            color: var(--medical-blue);
-            font-size: 2.5rem;
-            font-weight: bold;
-            margin-bottom: 1rem;
-        }
-        
-        /* Custom icon styling */
-        .icon-container {
+            height: calc(100vh - 100px);
             display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 1rem;
+            flex-direction: column;
+        }
+        
+        /* Header */
+        .chat-header {
+            position: sticky;
+            top: 0;
+            background: var(--background-color);
+            padding: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+        
+        /* Messages area */
+        .chat-messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+        
+        /* Message bubbles */
+        .user-message {
+            background: #2C3E50;
+            color: white;
+            border-radius: 20px 20px 5px 20px;
+            padding: 1rem;
+            margin: 1rem 0;
+            max-width: 80%;
+            margin-left: auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .bot-message {
+            background: #34495E;
+            color: white;
+            border-radius: 20px 20px 20px 5px;
+            padding: 1rem;
+            margin: 1rem 0;
+            max-width: 80%;
+            margin-right: auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        /* Severity indicators */
+        .severity-high {
+            border-left: 4px solid #FF4444;
+        }
+        
+        .severity-medium {
+            border-left: 4px solid #FFA500;
+        }
+        
+        .severity-low {
+            border-left: 4px solid #28a745;
+        }
+        
+        /* Input area */
+        .chat-input {
+            position: sticky;
+            bottom: 0;
+            background: var(--background-color);
+            padding: 1rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        /* Custom styles */
+        .stTextInput > div > div > input {
+            border-radius: 20px !important;
+            padding: 10px 20px !important;
+            background: rgba(255, 255, 255, 0.1) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            color: white !important;
+        }
+        
+        .stButton > button {
+            border-radius: 20px !important;
+            padding: 10px 20px !important;
+            background: #0077cc !important;
+            color: white !important;
+            border: none !important;
+        }
+        
+        /* Hide Streamlit branding */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        
+        /* Emergency badge */
+        .emergency-badge {
+            background: #FF4444;
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            margin-left: 0.5rem;
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
         }
     </style>
 """, unsafe_allow_html=True)
-
-# Sidebar
 with st.sidebar:
-    st.markdown('<div class="icon-container"><h1>🏥 MediBot</h1></div>', unsafe_allow_html=True)
+    st.title("🏥 MediChat")
     st.markdown("""
-    ### How it Works:
-    1. 📄 Upload your medical document
-    2. ⏳ Wait for processing
-    3. 💬 Ask medical questions
+    ### Instructions:
+    1. Describe your medical concern
+    2. Wait for the assistant's response
+    3. Follow the assistant's guidance
     
     ### Features:
-    - 📊 Medical document analysis
-    - 🔍 Intelligent context understanding
-    - 📝 Detailed medical insights
-    - 📚 Secure document handling
+    - Medical pre-screening
+    - Severity assessment
+    - Chat history with memory
     
-    ### Supported Formats:
-    - Medical Reports (PDF)
-    - Clinical Notes (DOCX)
-    - Lab Results (TXT)
-    
-    ### Important Note:
-    This bot is for informational purposes only and should not replace professional medical advice.
+    ### About:
+    This AI assistant helps assess the severity of your medical concerns based on your symptoms.
     """)
-# Initialize session state variables
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'vector_store' not in st.session_state:
-    st.session_state.vector_store = None
-if 'error' not in st.session_state:
-    st.session_state.error = None
-if 'current_doc' not in st.session_state:
-    st.session_state.current_doc = None
- 
-def init_groq() -> ChatGroq:
-    """Initialize the Groq LLM with appropriate parameters."""
-    api_key = st.secrets["GROQ_API_KEY"]
+# Initialize session state
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'memory' not in st.session_state:
+    st.session_state.memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        return_messages=True
+    )
+if 'user_input' not in st.session_state:
+    st.session_state.user_input = ""
+
+def init_llm():
+    """Initialize the Groq LLM."""
     return ChatGroq(
-        api_key=api_key,
-        model_name="llama-3.3-70b-versatile",
-        temperature=0.5,
-        max_tokens=1024,
-        top_p=0.9,
-        presence_penalty=0.1,
-        frequency_penalty=0.1
+        api_key=st.secrets["GROQ_API_KEY"],
+        model_name="mixtral-8x7b-32768",
+        temperature=0.7
     )
- 
-def init_embeddings() -> HuggingFaceEmbeddings:
-    """Initialize the embeddings model."""
-    return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={'device': 'cpu'}
-    )
- 
-def get_system_prompt() -> str:
-    """Return the system prompt template."""
-    return """You are a helpful AI assistant that answers questions based on the provided documents.
-   
-    Guidelines for your responses:
-    1. Only answer based on the information from the provided document context
-    2. If the answer cannot be found in the documents, say "I cannot find this information in the provided documents"
-    3. Keep responses concise and to the point
-    4. If relevant, cite specific sections from the document
-    5. Maintain a professional and helpful tone
-    6. If asked about topics outside the document, remind the user you can only answer questions about the uploaded document
-   
-    Context from documents: {context}
-   
-    Current conversation history: {chat_history}
-   
-    Question: {question}
-   
-    Helpful Answer:"""
- 
-def process_document(file_path: str, file_type: str) -> List[Document]:
-    """Process document based on file type."""
-    try:
-        if file_type.lower() == '.pdf':
-            loader = PyPDFLoader(file_path)
-        elif file_type.lower() == '.docx':
-            loader = Docx2txtLoader(file_path)
-        elif file_type.lower() == '.txt':
-            loader = TextLoader(file_path)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}")
-       
-        documents = loader.load()
-        if not documents:
-            raise ValueError("No text could be extracted from the document.")
-        return documents
-    except Exception as e:
-        raise Exception(f"Error loading document: {str(e)}")
- 
-def process_file(uploaded_file):
-    """Process the uploaded file and create vector store."""
-    if uploaded_file.name == st.session_state.current_doc:
-        return st.session_state.vector_store
-   
-    file_extension = os.path.splitext(uploaded_file.name)[1]
-   
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        tmp_file_path = tmp_file.name
- 
-    try:
-        # Load and process document
-        documents = process_document(tmp_file_path, file_extension)
-       
-        # Split text into chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-            separators=["\n\n", "\n", " ", ""]
-        )
-        chunks = text_splitter.split_documents(documents)
- 
-        if not chunks:
-            raise ValueError("Document was processed but no usable text chunks were created.")
- 
-        # Create vector store
-        embeddings = init_embeddings()
-        vector_store = FAISS.from_documents(chunks, embeddings)
-       
-        st.session_state.current_doc = uploaded_file.name
-        return vector_store
- 
-    except Exception as e:
-        st.session_state.error = str(e)
-        return None
-    finally:
-        try:
-            os.unlink(tmp_file_path)
-        except:
-            pass
- 
-def get_conversation_chain(vector_store):
-    """Create conversation chain with vector store."""
-    llm = init_groq()
-   
-    # Create QA chain with custom prompt
-    qa_chain = ConversationalRetrievalChain.from_llm(
+def get_conversation_chain():
+    """Create a conversation chain with memory."""
+    llm = init_llm()
+    
+    return ConversationChain(
         llm=llm,
-        retriever=vector_store.as_retriever(search_kwargs={
-            'k': 3,
-            'fetch_k': 5,
-            'maximal_marginal_relevance': True,
-        }),
-        return_source_documents=True,
-        verbose=False,
-        combine_docs_chain_kwargs={'prompt': PromptTemplate(
-            input_variables=['context', 'question', 'chat_history'],
-            template=get_system_prompt()
-        )}
+        memory=st.session_state.memory,
+        prompt=PromptTemplate(
+            input_variables=["chat_history", "input"],
+            template=MEDICAL_TEMPLATE
+        ),
+        verbose=False
     )
-   
-    return qa_chain
- 
-# Main UI
-st.title("Document Q&A Bot")
- 
-# File upload
-uploaded_file = st.file_uploader(
-    "Upload your document",
-    type=['pdf', 'docx', 'txt'],
-    help="Upload a PDF, DOCX, or TXT file to begin"
-)
- 
-# Process uploaded file
-if uploaded_file:
-    with st.spinner("Processing document... This may take a minute."):
-        st.session_state.vector_store = process_file(uploaded_file)
-       
-    if st.session_state.vector_store:
-        st.success("Document processed successfully! You can now ask questions.")
-    elif st.session_state.error:
-        st.error(st.session_state.error)
-        st.session_state.error = None
- 
-# Chat interface
-if st.session_state.vector_store is not None:
-    col1, col2 = st.columns([4, 1])
-   
-    with col2:
-        if st.button("Clear Chat History"):
-            st.session_state.chat_history = []
-            st.experimental_rerun()
-   
-    with col1:
-        user_question = st.text_input(
-            "Ask a question about your document:",
-            placeholder="Enter your question here...",
-            key="question_input"
-        )
-   
-    if user_question:
-        chain = get_conversation_chain(st.session_state.vector_store)
-       
-        with st.spinner("Generating response..."):
-            try:
-                response = chain({
-                    'question': user_question,
-                    'chat_history': st.session_state.chat_history
-                })
-               
-                st.session_state.chat_history.append((user_question, response['answer']))
- 
-            except Exception as e:
-                st.error(f"Error generating response: {str(e)}")
- 
-    # Display chat history
-    if st.session_state.chat_history:
-        st.subheader("Chat History")
-        for i, (question, answer) in enumerate(st.session_state.chat_history):
-            st.markdown(f"**Q{i+1}: {question}**")
-            st.markdown(f"A{i+1}: {answer}")
-            st.divider()
- 
-# Initial instructions
-else:
-    st.info("👆 Please upload a document to start asking questions!")
+# Enhanced prompt template with medical context and chat history
+MEDICAL_TEMPLATE = """You are a concise and focused medical pre-screening assistant. Provide brief, clear responses while considering the conversation history.
+
+Guidelines:
+1. Keep responses short and direct (2-3 sentences for normal cases)
+2. Only mention severity if it's HIGH
+3. Ask at most one follow-up question if needed
+4. Don't repeat previous information unless there's a significant change
+5. Focus on new information in each response
+
+Previous conversation:
+{chat_history}
+
+Current symptoms: {input}
+
+Additional guidelines:
+- Don't start every response with "I see" or "I understand"
+- Don't repeat the symptoms just mentioned
+- Don't say "I'm glad you're reaching out" in every response
+- Only mention "seek immediate medical attention" for HIGH severity cases
+- Keep responses conversational but professional
+
+Your response should be brief and focused on either:
+1. Addressing the new symptom
+2. Asking one specific follow-up question
+3. Providing clear guidance if severity is HIGH
+
+Response:"""
+
+def determine_severity(symptoms: list, response: str) -> str:
+    """Determine severity level from symptoms and response."""
+    # List of high-severity indicators
+    high_severity_symptoms = [
+        "chest pain", "difficulty breathing", "severe pain",
+        "unconscious", "seizure", "stroke", "heart attack"
+    ]
+    
+    # List of medium-severity indicators
+    medium_severity_symptoms = [
+        "fever", "persistent", "worsening", "moderate pain",
+        "infection", "vomiting", "diarrhea"
+    ]
+    
+    response_upper = response.upper()
+    
+    # Check for high severity conditions
+    if any(symptom in " ".join(symptoms).lower() for symptom in high_severity_symptoms):
+        return "HIGH"
+    elif "HIGH" in response_upper or "EMERGENCY" in response_upper or "IMMEDIATE" in response_upper:
+        return "HIGH"
+    # Check for medium severity conditions
+    elif any(symptom in " ".join(symptoms).lower() for symptom in medium_severity_symptoms):
+        return "MEDIUM"
+    elif "MEDIUM" in response_upper or "MODERATE" in response_upper:
+        return "MEDIUM"
+    return "LOW"
+
+def process_user_input():
+    """Process user input and generate response with memory."""
+    if st.session_state.user_input:
+        user_message = st.session_state.user_input.strip()
+        
+        # Update symptoms list
+        if 'symptoms' not in st.session_state:
+            st.session_state.symptoms = []
+        st.session_state.symptoms.append(user_message)
+        
+        # Add user message to display
+        st.session_state.messages.append({
+            "role": "user",
+            "content": user_message
+        })
+        
+        # Clear input
+        st.session_state.user_input = ""
+        
+        try:
+            # Get response using conversation chain with memory
+            conversation = get_conversation_chain()
+            response = conversation.predict(input=user_message)
+            
+            # Determine severity based on all symptoms and response
+            severity = determine_severity(st.session_state.symptoms, response)
+            
+            # Add assistant response to display
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response,
+                "severity": severity
+            })
+            
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+
+def clear_chat():
+    """Clear chat history and memory."""
+    st.session_state.messages = []
+    st.session_state.symptoms = []
+    st.session_state.memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        return_messages=True
+    )
+# UI Components
+
+# Chat header
+st.markdown("""
+    <div class="chat-header">
+        <h1>🏥 MediChat Assistant</h1>
+        <p>Your AI Medical Pre-screening Assistant with Memory</p>
+    </div>
+""", unsafe_allow_html=True)
+with st.container():
+# Chat messages container
+    st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
+
+    # Display welcome message if no messages
+    if not st.session_state.messages:
+        st.markdown("""
+            <div class="bot-message">
+                👋 Hello! I'm your medical pre-screening assistant. I can remember our conversation to provide better guidance.
+                Please describe your medical concern, and I'll help assess its severity.
+                
+                ⚠️ Remember: For medical emergencies, call emergency services immediately!
+            </div>
+        """, unsafe_allow_html=True)
+
+    # Display chat history with context awareness
+    for message in st.session_state.messages:
+        if message["role"] == "user":
+            st.markdown(f"""
+                <div class="user-message">
+                    {message["content"]}
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            severity_class = f"severity-{message.get('severity', 'low').lower()}"
+            severity_badge = ""
+            if message.get('severity') == "HIGH":
+                severity_badge = '<span class="emergency-badge">URGENT</span>'
+            
+            st.markdown(f"""
+                <div class="bot-message {severity_class}">
+                    {severity_badge}
+                    {message["content"]}
+                </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Chat input and controls
+st.markdown('<div class="chat-input">', unsafe_allow_html=True)
+col1, col2 = st.columns([4, 1])
+
+with col1:
+    st.text_input(
+        "",
+        placeholder="Describe your medical concern...",
+        key="user_input",
+        on_change=process_user_input
+    )
+
+with col2:
+    if st.session_state.messages and st.button("Clear Chat"):
+        clear_chat()
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# Medical disclaimer
+st.markdown("""
+    <div style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.6); text-align: center; padding: 1rem;">
+        ⚕️ Medical Disclaimer: This is an AI assistant for informational purposes only. 
+        Always seek professional medical advice for health concerns.
+        
+        🔒 Your conversation history is used to provide better guidance but is not stored permanently.
+    </div>
+""", unsafe_allow_html=True)
