@@ -1,256 +1,276 @@
-# app.py
 import streamlit as st
+from dotenv import load_dotenv
 import os
-import tempfile
-from typing import List
- 
 from langchain_groq import ChatGroq
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import ConversationalRetrievalChain
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_community.document_loaders import Docx2txtLoader
-from langchain.schema import Document
+from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
- 
+
+# Load environment variables
+load_dotenv()
+
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Document Q&A Bot",
-    page_icon="📚",
+    page_title="Healthcare Assistant",
+    page_icon="👨‍⚕️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
- 
-# Add custom CSS
+
+# Custom CSS for attractive UI
 st.markdown("""
     <style>
-        .reportview-container {
-            margin-top: -2em;
+        /* Main container styling */
+        .main {
+            padding: 2rem;
         }
-        .stButton>button {
-            width: 100%;
+        
+        /* Custom title styling */
+        .title-container {
+            background-color: #f0f7ff;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            text-align: center;
         }
-        .stAlert {
-            margin-top: 1em;
-            margin-bottom: 1em;
+        
+        /* Chat container styling */
+        .chat-container {
+            background-color: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+        }
+        
+        /* User message styling */
+        .user-message {
+            background-color: #e3f2fd;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+        }
+        
+        /* Bot message styling */
+        .bot-message {
+            background-color: #f5f5f5;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+        }
+        
+        /* Category indicators */
+        .category-general {
+            background-color: #c8e6c9;
+            padding: 0.5rem;
+            border-radius: 5px;
+            color: #2e7d32;
+            display: inline-block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .category-moderate {
+            background-color: #fff3e0;
+            padding: 0.5rem;
+            border-radius: 5px;
+            color: #ef6c00;
+            display: inline-block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .category-hard {
+            background-color: #ffebee;
+            padding: 0.5rem;
+            border-radius: 5px;
+            color: #c62828;
+            display: inline-block;
+            margin-bottom: 0.5rem;
+        }
+        
+        /* Custom button styling */
+        .stButton > button {
+            background-color: #1976d2;
+            color: white;
+            border-radius: 5px;
+            padding: 0.5rem 1rem;
+            border: none;
+            transition: all 0.3s ease;
+        }
+        
+        .stButton > button:hover {
+            background-color: #1565c0;
+            transform: translateY(-2px);
+        }
+        
+        /* Disclaimer styling */
+        .disclaimer {
+            background-color: #fff3e0;
+            padding: 1rem;
+            border-radius: 5px;
+            margin-top: 2rem;
+            font-size: 0.9rem;
+            border-left: 4px solid #ff9800;
+        }
+        
+        /* Custom header styling */
+        h1, h2, h3 {
+            color: #1976d2;
+            font-family: 'Arial', sans-serif;
         }
     </style>
 """, unsafe_allow_html=True)
- 
-# Sidebar
-with st.sidebar:
-    st.title("📚 Document Q&A Bot")
-    st.markdown("""
-    ### Instructions:
-    1. Upload your document (PDF, DOCX, or TXT)
-    2. Wait for processing
-    3. Ask questions about the document
-   
-    ### Features:
-    - PDF, DOCX, and TXT support
-    - Advanced text processing
-    - Context-aware responses
-    - Chat history
-   
-    ### About:
-    This bot uses RAG (Retrieval Augmented Generation) to provide accurate answers based on your documents.
-    """)
- 
-# Initialize session state variables
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'vector_store' not in st.session_state:
-    st.session_state.vector_store = None
-if 'error' not in st.session_state:
-    st.session_state.error = None
-if 'current_doc' not in st.session_state:
-    st.session_state.current_doc = None
- 
-def init_groq() -> ChatGroq:
-    """Initialize the Groq LLM with appropriate parameters."""
-    api_key = st.secrets["GROQ_API_KEY"]
+
+def get_api_key():
+    """Get API key from environment variables."""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        st.error("No API key found. Please set GROQ_API_KEY in .env file.")
+        st.stop()
+    return api_key
+
+def init_llm():
+    """Initialize the Groq LLM."""
+    api_key = get_api_key()
     return ChatGroq(
         api_key=api_key,
         model_name="llama-3.3-70b-versatile",
-        temperature=0.5,
+        temperature=0.7,
         max_tokens=1024,
-        top_p=0.9,
-        presence_penalty=0.1,
-        frequency_penalty=0.1
+        top_p=0.9
     )
- 
-def init_embeddings() -> HuggingFaceEmbeddings:
-    """Initialize the embeddings model."""
-    return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={'device': 'cpu'}
-    )
- 
-def get_system_prompt() -> str:
-    """Return the system prompt template."""
-    return """You are a helpful AI assistant that answers questions based on the provided documents.
-   
-    Guidelines for your responses:
-    1. Only answer based on the information from the provided document context
-    2. If the answer cannot be found in the documents, say "I cannot find this information in the provided documents"
-    3. Keep responses concise and to the point
-    4. If relevant, cite specific sections from the document
-    5. Maintain a professional and helpful tone
-    6. If asked about topics outside the document, remind the user you can only answer questions about the uploaded document
-   
-    Context from documents: {context}
-   
-    Current conversation history: {chat_history}
-   
-    Question: {question}
-   
-    Helpful Answer:"""
- 
-def process_document(file_path: str, file_type: str) -> List[Document]:
-    """Process document based on file type."""
-    try:
-        if file_type.lower() == '.pdf':
-            loader = PyPDFLoader(file_path)
-        elif file_type.lower() == '.docx':
-            loader = Docx2txtLoader(file_path)
-        elif file_type.lower() == '.txt':
-            loader = TextLoader(file_path)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}")
-       
-        documents = loader.load()
-        if not documents:
-            raise ValueError("No text could be extracted from the document.")
-        return documents
-    except Exception as e:
-        raise Exception(f"Error loading document: {str(e)}")
- 
-def process_file(uploaded_file):
-    """Process the uploaded file and create vector store."""
-    if uploaded_file.name == st.session_state.current_doc:
-        return st.session_state.vector_store
-   
-    file_extension = os.path.splitext(uploaded_file.name)[1]
-   
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        tmp_file_path = tmp_file.name
- 
-    try:
-        # Load and process document
-        documents = process_document(tmp_file_path, file_extension)
-       
-        # Split text into chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-            separators=["\n\n", "\n", " ", ""]
-        )
-        chunks = text_splitter.split_documents(documents)
- 
-        if not chunks:
-            raise ValueError("Document was processed but no usable text chunks were created.")
- 
-        # Create vector store
-        embeddings = init_embeddings()
-        vector_store = FAISS.from_documents(chunks, embeddings)
-       
-        st.session_state.current_doc = uploaded_file.name
-        return vector_store
- 
-    except Exception as e:
-        st.session_state.error = str(e)
-        return None
-    finally:
-        try:
-            os.unlink(tmp_file_path)
-        except:
-            pass
- 
-def get_conversation_chain(vector_store):
-    """Create conversation chain with vector store."""
-    llm = init_groq()
-   
-    # Create QA chain with custom prompt
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vector_store.as_retriever(search_kwargs={
-            'k': 3,
-            'fetch_k': 5,
-            'maximal_marginal_relevance': True,
-        }),
-        return_source_documents=True,
-        verbose=False,
-        combine_docs_chain_kwargs={'prompt': PromptTemplate(
-            input_variables=['context', 'question', 'chat_history'],
-            template=get_system_prompt()
-        )}
-    )
-   
-    return qa_chain
- 
-# Main UI
-st.title("Document Q&A Bot")
- 
-# File upload
-uploaded_file = st.file_uploader(
-    "Upload your document",
-    type=['pdf', 'docx', 'txt'],
-    help="Upload a PDF, DOCX, or TXT file to begin"
-)
- 
-# Process uploaded file
-if uploaded_file:
-    with st.spinner("Processing document... This may take a minute."):
-        st.session_state.vector_store = process_file(uploaded_file)
-       
-    if st.session_state.vector_store:
-        st.success("Document processed successfully! You can now ask questions.")
-    elif st.session_state.error:
-        st.error(st.session_state.error)
-        st.session_state.error = None
- 
+
+def get_medical_prompt():
+    """Return the medical conversation prompt template."""
+    return """You are an AI medical assistant. Analyze the query and respond in ONE of these THREE formats ONLY, based on severity:
+
+    1. For GENERAL (Simple) queries - Mild issues like common cold, mild headache:
+    🟢 General (Simple)
+    [Provide a quick, 1-2 sentence solution with basic home remedies or OTC medicines]
+
+    2. For MODERATE (Intermediate) queries - Ongoing but non-emergency issues:
+    🟡 Moderate (Intermediate)
+    [Give a brief 2-3 sentence explanation of possible causes + simple medical advice + when to see doctor]
+
+    3. For HARD (Serious) queries - Emergency situations:
+    🔴 Hard (Serious)
+    [Provide an urgent 1-2 sentence warning + specific immediate action to take]
+
+    IMPORTANT RULES:
+    - Choose ONLY ONE category
+    - Keep responses brief and focused
+    - For serious issues, always emphasize immediate medical attention
+    - Include a short medical disclaimer for serious conditions
+
+    User Query: {user_input}
+
+    Response:"""
+
+# Initialize session state for chat history
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
+# Sidebar content
+with st.sidebar:
+    st.markdown("""
+        <h2 style='text-align: center;'>👨‍⚕️ Healthcare Assistant</h2>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    ### About
+    I'm your AI healthcare assistant, here to provide:
+    - Quick medical guidance
+    - Symptom assessment
+    - Health recommendations
+    
+    ### Response Categories
+    🟢 **General (Simple)**
+    - Quick solutions for mild issues
+    
+    🟡 **Moderate (Intermediate)**
+    - Brief explanation + basic medical advice
+    
+    🔴 **Hard (Serious)**
+    - Urgent warning + immediate action
+    
+    ### How to Use
+    1. Type your health concern
+    2. Get instant medical guidance
+    3. Follow recommended actions
+    """)
+    
+    if st.button("Clear Chat History"):
+        st.session_state.chat_history = []
+        st.rerun()
+
+# Main content area
+st.markdown("""
+    <div class='title-container'>
+        <h1>👨‍⚕️ Your Personal Healthcare Assistant</h1>
+        <p>Get quick, focused medical guidance for your health concerns</p>
+    </div>
+""", unsafe_allow_html=True)
+
 # Chat interface
-if st.session_state.vector_store is not None:
-    col1, col2 = st.columns([4, 1])
-   
-    with col2:
-        if st.button("Clear Chat History"):
-            st.session_state.chat_history = []
-            st.experimental_rerun()
-   
-    with col1:
-        user_question = st.text_input(
-            "Ask a question about your document:",
-            placeholder="Enter your question here...",
-            key="question_input"
+user_input = st.text_input(
+    "Describe your symptoms or health concern:",
+    placeholder="Example: I've been having a mild headache since morning...",
+    key="user_input"
+)
+
+if user_input:
+    try:
+        # Initialize LLM and create chain
+        llm = init_llm()
+        prompt = PromptTemplate(
+            input_variables=["user_input"],
+            template=get_medical_prompt()
         )
-   
-    if user_question:
-        chain = get_conversation_chain(st.session_state.vector_store)
-       
-        with st.spinner("Generating response..."):
-            try:
-                response = chain({
-                    'question': user_question,
-                    'chat_history': st.session_state.chat_history
-                })
-               
-                st.session_state.chat_history.append((user_question, response['answer']))
- 
-            except Exception as e:
-                st.error(f"Error generating response: {str(e)}")
- 
-    # Display chat history
-    if st.session_state.chat_history:
-        st.subheader("Chat History")
-        for i, (question, answer) in enumerate(st.session_state.chat_history):
-            st.markdown(f"**Q{i+1}: {question}**")
-            st.markdown(f"A{i+1}: {answer}")
-            st.divider()
- 
-# Initial instructions
+        chain = LLMChain(llm=llm, prompt=prompt)
+        
+        # Get response
+        with st.spinner("Analyzing your concern..."):
+            response = chain.run(user_input=user_input)
+            st.session_state.chat_history.append({"user": user_input, "bot": response})
+    
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
+
+# Display chat history
+if st.session_state.chat_history:
+    for chat in reversed(st.session_state.chat_history):
+        # User message
+        st.markdown(f"""
+            <div class='user-message'>
+                <strong>You:</strong><br>{chat['user']}
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Bot message
+        st.markdown(f"""
+            <div class='bot-message'>
+                <strong>Healthcare Assistant:</strong><br>{chat['bot']}
+            </div>
+        """, unsafe_allow_html=True)
 else:
-    st.info("👆 Please upload a document to start asking questions!")
+    # Welcome message
+    st.markdown("""
+        <div class='chat-container'>
+            <h3>👋 Welcome to Your Healthcare Assistant!</h3>
+            <p>I provide quick, focused guidance for your health concerns:</p>
+            <ul>
+                <li>Simple remedies for mild symptoms</li>
+                <li>Brief medical advice for ongoing issues</li>
+                <li>Urgent guidance for serious conditions</li>
+            </ul>
+        </div>
+    """, unsafe_allow_html=True)
+
+# Disclaimer
+st.markdown("""
+    <div class='disclaimer'>
+        <strong>⚠️ Important Disclaimer:</strong><br>
+        This AI healthcare assistant provides general medical information and guidance only. 
+        It is not a substitute for professional medical advice, diagnosis, or treatment. 
+        Always seek the advice of your physician or other qualified health provider with any 
+        questions you may have regarding a medical condition.
+    </div>
+""", unsafe_allow_html=True)
