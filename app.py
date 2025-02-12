@@ -16,47 +16,118 @@ from langchain.prompts import PromptTemplate
  
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Document Q&A Bot",
-    page_icon="📚",
+    page_title="MediBot - Medical Document Assistant",
+    page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
- 
-# Add custom CSS
+
+# Add custom CSS for medical theme
 st.markdown("""
     <style>
-        .reportview-container {
-            margin-top: -2em;
+        /* Medical color scheme */
+        :root {
+            --medical-blue: #0077cc;
+            --light-blue: #e6f3ff;
+            --medical-red: #ff4444;
         }
+        
+        /* Header styling */
+        .main .block-container {
+            padding-top: 2rem;
+        }
+        
+        /* Sidebar styling */
+        .css-1d391kg {
+            background-color: var(--light-blue);
+        }
+        
+        /* Button styling */
         .stButton>button {
             width: 100%;
+            background-color: var(--medical-blue) !important;
+            color: white !important;
+            border-radius: 25px;
         }
+        
+        /* Chat container styling */
+        .chat-container {
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1rem;
+            margin: 1rem 0;
+            background-color: white;
+        }
+        
+        /* Question styling */
+        .question {
+            background-color: var(--light-blue);
+            padding: 1rem;
+            border-radius: 15px;
+            margin: 0.5rem 0;
+        }
+        
+        /* Answer styling */
+        .answer {
+            background-color: white;
+            padding: 1rem;
+            border-radius: 15px;
+            margin: 0.5rem 0;
+            border-left: 4px solid var(--medical-blue);
+        }
+        
+        /* Alert styling */
         .stAlert {
-            margin-top: 1em;
-            margin-bottom: 1em;
+            border-radius: 10px;
+            margin: 1rem 0;
+        }
+        
+        /* Input field styling */
+        .stTextInput>div>div>input {
+            border-radius: 25px;
+        }
+        
+        /* Custom title styling */
+        .medical-title {
+            color: var(--medical-blue);
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        
+        /* Custom icon styling */
+        .icon-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 1rem;
         }
     </style>
 """, unsafe_allow_html=True)
- 
+
 # Sidebar
 with st.sidebar:
-    st.title("📚 Document Q&A Bot")
+    st.markdown('<div class="icon-container"><h1>🏥 MediBot</h1></div>', unsafe_allow_html=True)
     st.markdown("""
-    ### Instructions:
-    1. Upload your document (PDF, DOCX, or TXT)
-    2. Wait for processing
-    3. Ask questions about the document
-   
+    ### How it Works:
+    1. 📄 Upload your medical document
+    2. ⏳ Wait for processing
+    3. 💬 Ask medical questions
+    
     ### Features:
-    - PDF, DOCX, and TXT support
-    - Advanced text processing
-    - Context-aware responses
-    - Chat history
-   
-    ### About:
-    This bot uses RAG (Retrieval Augmented Generation) to provide accurate answers based on your documents.
+    - 📊 Medical document analysis
+    - 🔍 Intelligent context understanding
+    - 📝 Detailed medical insights
+    - 📚 Secure document handling
+    
+    ### Supported Formats:
+    - Medical Reports (PDF)
+    - Clinical Notes (DOCX)
+    - Lab Results (TXT)
+    
+    ### Important Note:
+    This bot is for informational purposes only and should not replace professional medical advice.
     """)
- 
 # Initialize session state variables
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
